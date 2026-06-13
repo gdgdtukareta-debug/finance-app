@@ -37,11 +37,17 @@ export function judgeStock(
     dividend_yield * 0.2;
 
   // 余剰資金投入候補判定（平均取得単価から surplus_threshold% 以上の下落）
-  const is_surplus_candidate = drop_from_avg <= settings.surplus_threshold;
+  let is_surplus_candidate = drop_from_avg <= settings.surplus_threshold;
 
   // 買い条件チェック
   const meets_high_condition = drop_from_high <= settings.drop_high_threshold;
-  const meets_avg_condition = drop_from_avg <= settings.drop_avg_threshold;
+  let meets_avg_condition = drop_from_avg <= settings.drop_avg_threshold;
+
+  if (stock.is_watchlist) {
+    meets_avg_condition = drop_from_avg <= 0; // 検討中銘柄は、現在値が目標単価以下なら買いOK
+    is_surplus_candidate = false; // 余剰資金投入候補からは外す
+  }
+
   const can_buy = meets_high_condition || meets_avg_condition;
 
   let judge: JudgeResult;
@@ -56,9 +62,13 @@ export function judgeStock(
   } else if (can_buy) {
     judge = '○';
     if (meets_avg_condition && meets_high_condition) {
-      judge_reason = `✅ 買いOK！3か月高値から${drop_from_high.toFixed(1)}%、平均単価から${drop_from_avg.toFixed(1)}%下落。`;
+      judge_reason = stock.is_watchlist 
+        ? `✅ 目標達成！3か月高値から${drop_from_high.toFixed(1)}%、目標単価を下回っています。`
+        : `✅ 買いOK！3か月高値から${drop_from_high.toFixed(1)}%、平均単価から${drop_from_avg.toFixed(1)}%下落。`;
     } else if (meets_avg_condition) {
-      judge_reason = `✅ 買いOK！平均取得単価から${drop_from_avg.toFixed(1)}%下落中。`;
+      judge_reason = stock.is_watchlist
+        ? `✅ 目標達成！目標単価を下回っています。`
+        : `✅ 買いOK！平均取得単価から${drop_from_avg.toFixed(1)}%下落中。`;
     } else {
       judge_reason = `✅ 買いOK！3か月高値から${drop_from_high.toFixed(1)}%下落中。`;
     }

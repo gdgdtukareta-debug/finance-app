@@ -1,10 +1,11 @@
 /**
- * デモ用データストア
- * LocalStorage（ブラウザ内の保存領域）を使って
- * Supabase（データベース）なしでもアプリが動くようにします。
+ * デモ用・本番用データストア
+ * LocalStorage（ブラウザ内の保存領域）を正としつつ、
+ * Supabaseが設定されていれば非同期で同期する Local-First アーキテクチャ
  */
 
 import { Stock, PriceData, BudgetSettings, AppSettings } from './types';
+import { supabase } from './supabase';
 
 // ==================== LocalStorageのキー定義 ====================
 const KEYS = {
@@ -31,7 +32,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const DEFAULT_BUDGET: BudgetSettings = {
-  user_id: 'demo_user',
+  user_id: 'default_user',
   monthly_budget: 0,
   rollover_enabled: false,
   rollover_limit: 10000,
@@ -43,52 +44,35 @@ export const DEFAULT_BUDGET: BudgetSettings = {
 export const DEMO_STOCKS: Stock[] = [
   {
     id: 'demo-1',
-    user_id: 'demo_user',
+    user_id: 'default_user',
     symbol: '7956',
     name: 'ピジョン',
     avg_price: 1800,
     shares: 100,
     is_target: true,
+    is_watchlist: false,
     created_at: new Date().toISOString(),
   },
   {
     id: 'demo-2',
-    user_id: 'demo_user',
+    user_id: 'default_user',
     symbol: '7267',
     name: 'ホンダ',
     avg_price: 3500,
     shares: 50,
     is_target: true,
+    is_watchlist: false,
     created_at: new Date().toISOString(),
   },
   {
     id: 'demo-3',
-    user_id: 'demo_user',
+    user_id: 'default_user',
     symbol: '9984',
     name: 'ソフトバンクグループ',
     avg_price: 6800,
     shares: 30,
     is_target: true,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: 'demo-4',
-    user_id: 'demo_user',
-    symbol: '6758',
-    name: 'ソニーグループ',
-    avg_price: 12000,
-    shares: 20,
-    is_target: false,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: 'demo-5',
-    user_id: 'demo_user',
-    symbol: '4502',
-    name: '武田薬品工業',
-    avg_price: 4200,
-    shares: 40,
-    is_target: true,
+    is_watchlist: false,
     created_at: new Date().toISOString(),
   },
 ];
@@ -110,38 +94,72 @@ function save<T>(key: string, data: T): void {
   localStorage.setItem(key, JSON.stringify(data));
 }
 
+// ==================== Supabase 同期ユーティリティ ====================
+
+// 起動時にSupabaseからデータを取得してローカルを更新する
+export async function syncFromSupabase() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return; // Supabase未設定時はスキップ
+
+  try {
+    const [{ data: stocksData }, { data: budgetData }, { data: settingsData }] = await Promise.all([
+      supabase.from('stocks').select('*'),
+      supabase.from('budget_settings').select('*').eq('user_id', 'default_user').single(),
+      supabase.from('app_settings').select('*').eq('user_id', 'default_user').single()
+    ]);
+
+    if (stocksData && stocksData.length > 0) save(KEYS.STOCKS, stocksData);
+    if (budgetData) save(KEYS.BUDGET, budgetData);
+    if (settingsData) save(KEYS.SETTINGS, settingsData);
+  } catch (error) {
+    console.error('Supabaseからの同期に失敗しました:', error);
+  }
+}
+
 // ==================== 銘柄（ポートフォリオ）管理 ====================
 
 export function getStocks(): Stock[] {
   const stocks = load<Stock[]>(KEYS.STOCKS, []);
   if (stocks.length === 0) {
-    // 初回はデモデータを自動投入
     save(KEYS.STOCKS, DEMO_STOCKS);
     return DEMO_STOCKS;
   }
-  return stocks;
+  // 下位互換性のため is_watchlist が無ければ false にする
+  return stocks.map(s => ({ ...s, is_watchlist: s.is_watchlist ?? false }));
 }
 
 export function saveStock(stock: Stock): void {
   const stocks = getStocks();
   const idx = stocks.findIndex(s => s.symbol === stock.symbol);
+  
   if (idx >= 0) {
     stocks[idx] = stock;
   } else {
     stocks.push(stock);
   }
   save(KEYS.STOCKS, stocks);
+
+  // Supabaseへ非同期保存
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    supabase.from('stocks').upsert(stock, { onConflict: 'id' }).then(({ error }) => {
+      if (error) console.error('Supabase保存エラー:', error);
+    });
+  }
 }
 
 export function deleteStock(symbol: string): void {
-  const stocks = getStocks().filter(s => s.symbol !== symbol);
-  save(KEYS.STOCKS, stocks);
+  const stocks = getStocks();
+  const stockToDelete = stocks.find(s => s.symbol === symbol);
+  const newStocks = stocks.filter(s => s.symbol !== symbol);
+  save(KEYS.STOCKS, newStocks);
+
+  // Supabaseから非同期削除
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && stockToDelete) {
+    supabase.from('stocks').delete().eq('id', stockToDelete.id).then(({ error }) => {
+      if (error) console.error('Supabase削除エラー:', error);
+    });
+  }
 }
 
-/**
- * CSV取り込み時の合算ロジック
- * 既存の株がある場合は保有数量を合算して平均取得単価を再計算する
- */
 export function upsertStockFromCSV(
   symbol: string,
   name: string,
@@ -151,51 +169,42 @@ export function upsertStockFromCSV(
   memo?: string
 ): void {
   const stocks = getStocks();
-  // 同一銘柄で、かつ口座区分も同じもの（または両方未指定）を探す
   const existing = stocks.find(s => s.symbol === symbol && s.account_type === accountType);
 
+  let updatedStock: Stock;
+
   if (existing) {
-    // 合算して平均取得単価を再計算
     const totalCost = existing.avg_price * existing.shares + newAvgPrice * newShares;
     const totalShares = existing.shares + newShares;
     existing.avg_price = Math.round(totalCost / totalShares);
     existing.shares = totalShares;
-    existing.name = name; // 銘柄名も更新
-    if (memo !== undefined) {
-      existing.memo = memo; // 明示的に渡された場合のみ更新
-    }
-    save(KEYS.STOCKS, stocks);
+    existing.name = name;
+    if (memo !== undefined) existing.memo = memo;
+    updatedStock = existing;
   } else {
-    const newStock: Stock = {
+    updatedStock = {
       id: `stock-${symbol}-${Date.now()}`,
-      user_id: 'demo_user',
+      user_id: 'default_user',
       symbol,
       name,
       avg_price: newAvgPrice,
       shares: newShares,
       account_type: accountType,
-      is_target: false, // デフォルトオフ（対象外）にする
+      is_target: false,
+      is_watchlist: false,
       memo: memo || '',
       created_at: new Date().toISOString(),
     };
-    stocks.push(newStock);
-    save(KEYS.STOCKS, stocks);
+    stocks.push(updatedStock);
   }
-}
-
-/**
- * 買い増し後の平均取得単価の再計算
- */
-export function recalcAvgPrice(symbol: string, buyPrice: number, buyShares: number): void {
-  const stocks = getStocks();
-  const stock = stocks.find(s => s.symbol === symbol);
-  if (!stock) return;
-
-  const totalCost = stock.avg_price * stock.shares + buyPrice * buyShares;
-  const totalShares = stock.shares + buyShares;
-  stock.avg_price = Math.round(totalCost / totalShares);
-  stock.shares = totalShares;
+  
   save(KEYS.STOCKS, stocks);
+
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    supabase.from('stocks').upsert(updatedStock, { onConflict: 'id' }).then(({ error }) => {
+      if (error) console.error(error);
+    });
+  }
 }
 
 // ==================== 株価キャッシュ管理 ====================
@@ -216,6 +225,12 @@ export function getBudget(): BudgetSettings {
 
 export function saveBudget(budget: BudgetSettings): void {
   save(KEYS.BUDGET, budget);
+  
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    supabase.from('budget_settings').upsert(budget, { onConflict: 'user_id' }).then(({ error }) => {
+      if (error) console.error(error);
+    });
+  }
 }
 
 // ==================== アプリ設定管理 ====================
@@ -226,6 +241,12 @@ export function getSettings(): AppSettings {
 
 export function saveSettings(settings: AppSettings): void {
   save(KEYS.SETTINGS, settings);
+
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    supabase.from('app_settings').upsert({ ...settings, user_id: 'default_user' }, { onConflict: 'user_id' }).then(({ error }) => {
+      if (error) console.error(error);
+    });
+  }
 }
 
 // ==================== 月末繰越処理 ====================

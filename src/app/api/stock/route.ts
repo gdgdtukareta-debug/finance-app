@@ -34,13 +34,34 @@ export async function GET(request: Request) {
     const priceData = result.price;
     const summaryDetail = result.summaryDetail;
 
-    const price = priceData?.regularMarketPrice?.raw ?? 0;
+    let rawPrice = priceData?.regularMarketPrice?.raw ?? 0;
+    let rawHigh = summaryDetail?.fiftyTwoWeekHigh?.raw ?? rawPrice;
+    let rawDividend = summaryDetail?.dividendRate?.raw ?? 0;
     
-    // 3か月高値の代わりに52週高値を活用（通常、買い増しの目安として安全側に働く指標となります）
-    const high_3m = summaryDetail?.fiftyTwoWeekHigh?.raw ?? price;
-    
-    // 年間予定配当金（1株当たり）
-    const dividend = summaryDetail?.dividendRate?.raw ?? 0;
+    // 米国株（USD）の場合は最新の為替レート（USD/JPY）で円換算する
+    let exchangeRate = 1;
+    if (priceData?.currency === 'USD') {
+      try {
+        const rateUrl = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/USDJPY=X?modules=price`;
+        const rateRes = await fetch(rateUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+          next: { revalidate: 3600 } // 為替は1時間キャッシュ
+        });
+        if (rateRes.ok) {
+          const rateData = await rateRes.json();
+          const fetchedRate = rateData?.quoteSummary?.result?.[0]?.price?.regularMarketPrice?.raw;
+          if (fetchedRate) {
+            exchangeRate = fetchedRate;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch exchange rate:', err);
+      }
+    }
+
+    const price = rawPrice * exchangeRate;
+    const high_3m = rawHigh * exchangeRate;
+    const dividend = rawDividend * exchangeRate;
 
     if (price === 0) {
       throw new Error('Fetched stock price is 0 or invalid');

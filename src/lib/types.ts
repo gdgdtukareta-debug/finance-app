@@ -12,6 +12,7 @@ export interface Stock {
   shares: number;       // 保有株数
   account_type?: string;// 口座区分（例: 特定口座, NISA成長投資枠など）
   is_target: boolean;   // 買い増し対象か
+  is_watchlist?: boolean; // 欲しいものリスト（購入検討中）か
   memo?: string;        // メモ（例: 優待目的、高値注意など）
   created_at: string;
 }

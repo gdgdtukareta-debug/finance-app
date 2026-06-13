@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { RefreshCw, TrendingDown, Wallet, ChevronRight, Zap, AlertCircle } from 'lucide-react';
-import { getStocks, getBudget, getSettings } from '@/lib/db';
+import { getStocks, getBudget, getSettings, syncFromSupabase } from '@/lib/db';
 import { fetchAllPrices } from '@/lib/stockApi';
 import { judgeAllStocks, isJudgeTimeNow } from '@/lib/judge';
 import { Stock, PriceData, StockJudgement, BudgetSettings, AppSettings } from '@/lib/types';
@@ -21,6 +21,7 @@ export default function HomePage() {
   const loadData = useCallback(async () => {
     setRefreshing(true);
     try {
+      await syncFromSupabase(); // 初回起動時にSupabaseからデータを取得して同期
       const s = getSettings();
       const b = getBudget();
       const stocks = getStocks();

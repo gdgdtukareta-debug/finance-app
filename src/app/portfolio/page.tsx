@@ -18,7 +18,7 @@ export default function PortfolioPage() {
   const [csvDragging, setCsvDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [form, setForm] = useState({ symbol: '', name: '', avg_price: '', shares: '', memo: '' });
+  const [form, setForm] = useState({ symbol: '', name: '', avg_price: '', shares: '', memo: '', is_watchlist: false });
 
   const loadData = useCallback(async () => {
     const storedStocks = getStocks();
@@ -49,17 +49,40 @@ export default function PortfolioPage() {
   };
 
   const handleAdd = () => {
-    if (!form.symbol || !form.name || !form.avg_price || !form.shares) {
+    if (!form.symbol || !form.name || !form.avg_price || (!form.is_watchlist && !form.shares)) {
       showToast('すべての項目を入力してください', 'error'); return;
     }
     const avgPrice = parseFloat(form.avg_price);
-    const shares = parseFloat(form.shares);
-    if (isNaN(avgPrice) || isNaN(shares) || avgPrice <= 0 || shares <= 0) {
+    const shares = form.is_watchlist ? 0 : parseFloat(form.shares);
+    if (isNaN(avgPrice) || avgPrice <= 0 || (!form.is_watchlist && (isNaN(shares) || shares <= 0))) {
       showToast('単価・株数は正の数値を入力してください', 'error'); return;
     }
-    upsertStockFromCSV(form.symbol.trim(), form.name.trim(), shares, avgPrice, undefined, form.memo.trim());
+
+    const existingStocks = getStocks();
+    const existing = existingStocks.find(s => s.symbol === form.symbol.trim());
+    if (existing) {
+       existing.avg_price = form.is_watchlist ? avgPrice : Math.round((existing.avg_price * existing.shares + avgPrice * shares) / (existing.shares + shares));
+       existing.shares = form.is_watchlist ? existing.shares : existing.shares + shares;
+       existing.is_watchlist = form.is_watchlist;
+       existing.memo = form.memo.trim() || existing.memo;
+       saveStock(existing);
+    } else {
+       saveStock({
+         id: `stock-${form.symbol.trim()}-${Date.now()}`,
+         user_id: 'default_user',
+         symbol: form.symbol.trim(),
+         name: form.name.trim(),
+         avg_price: avgPrice,
+         shares: shares,
+         is_target: false,
+         is_watchlist: form.is_watchlist,
+         memo: form.memo.trim(),
+         created_at: new Date().toISOString()
+       });
+    }
+
     loadData();
-    setForm({ symbol: '', name: '', avg_price: '', shares: '', memo: '' });
+    setForm({ symbol: '', name: '', avg_price: '', shares: '', memo: '', is_watchlist: false });
     setShowAddForm(false);
     showToast(`${form.name} を登録しました`, 'success');
   };
@@ -258,9 +281,12 @@ export default function PortfolioPage() {
     }
   };
 
-  // 合計の計算
-  const totalInvestment = stocks.reduce((sum, s) => sum + s.avg_price * s.shares, 0);
-  const totalValue = stocks.reduce((sum, s) => {
+  // 合計の計算（保有銘柄のみ）
+  const ownedStocks = stocks.filter(s => !s.is_watchlist);
+  const watchlistStocks = stocks.filter(s => s.is_watchlist);
+
+  const totalInvestment = ownedStocks.reduce((sum, s) => sum + s.avg_price * s.shares, 0);
+  const totalValue = ownedStocks.reduce((sum, s) => {
     const p = prices[s.symbol]?.price ?? s.avg_price;
     return sum + p * s.shares;
   }, 0);
@@ -304,7 +330,7 @@ export default function PortfolioPage() {
 
       <div className="page-content fade-in">
         {/* ポートフォリオ合計サマリー */}
-        {stocks.length > 0 && (
+        {ownedStocks.length > 0 && (
           <div className="section" style={{ marginTop: 12 }}>
             <div className="card card-glass" style={{
               background: 'linear-gradient(135deg, rgba(30,41,59,0.4) 0%, rgba(15,23,42,0.7) 100%)',
@@ -330,7 +356,7 @@ export default function PortfolioPage() {
                 <div>
                   <span className="label" style={{ fontSize: 10 }}>銘柄数</span>
                   <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'Outfit', marginTop: 2, color: 'var(--text-secondary)' }}>
-                    {stocks.length} 銘柄
+                    {ownedStocks.length} 銘柄
                   </div>
                 </div>
               </div>
@@ -398,17 +424,29 @@ export default function PortfolioPage() {
                       onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
                   </div>
                 </div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                    <input type="radio" name="type" checked={!form.is_watchlist} onChange={() => setForm(f => ({ ...f, is_watchlist: false }))} />
+                    保有中
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                    <input type="radio" name="type" checked={form.is_watchlist} onChange={() => setForm(f => ({ ...f, is_watchlist: true }))} />
+                    検討中（欲しいものリスト）
+                  </label>
+                </div>
                 <div className="grid-2">
                   <div className="form-group">
-                    <label className="form-label">平均取得単価（円）</label>
+                    <label className="form-label">{form.is_watchlist ? '目標単価（円）' : '平均取得単価（円）'}</label>
                     <input className="form-input" type="number" placeholder="例: 1800" value={form.avg_price}
                       onChange={e => setForm(f => ({ ...f, avg_price: e.target.value }))} />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">保有株数</label>
-                    <input className="form-input" type="number" placeholder="例: 100" value={form.shares}
-                      onChange={e => setForm(f => ({ ...f, shares: e.target.value }))} />
-                  </div>
+                  {!form.is_watchlist && (
+                    <div className="form-group">
+                      <label className="form-label">保有株数</label>
+                      <input className="form-input" type="number" placeholder="例: 100" value={form.shares}
+                        onChange={e => setForm(f => ({ ...f, shares: e.target.value }))} />
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label className="form-label">メモ（任意）</label>
@@ -423,23 +461,23 @@ export default function PortfolioPage() {
           </div>
         )}
 
-        {/* 銘柄一覧 */}
+        {/* 保有銘柄一覧 */}
         <div className="section">
           <div className="row-between" style={{ marginBottom: 12 }}>
-            <p className="section-title" style={{ margin: 0 }}>保有銘柄 ({stocks.length})</p>
+            <p className="section-title" style={{ margin: 0 }}>保有銘柄 ({ownedStocks.length})</p>
             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              買い増し対象: {stocks.filter(s => s.is_target).length}銘柄
+              買い増し対象: {ownedStocks.filter(s => s.is_target).length}銘柄
             </span>
           </div>
-          {stocks.length === 0 ? (
+          {ownedStocks.length === 0 ? (
             <div className="empty-state" style={{ padding: '40px 16px' }}>
               <div className="empty-state-icon"><Plus size={24} /></div>
-              <h3>銘柄がありません</h3>
+              <h3>保有銘柄がありません</h3>
               <p>右上の「＋」ボタンまたはCSVで追加してください</p>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {stocks.map(stock => (
+              {ownedStocks.map(stock => (
                 <StockListItem
                   key={stock.symbol}
                   stock={stock}
@@ -458,6 +496,33 @@ export default function PortfolioPage() {
             </div>
           )}
         </div>
+
+        {/* 検討中（欲しいものリスト）一覧 */}
+        {watchlistStocks.length > 0 && (
+          <div className="section">
+            <div className="row-between" style={{ marginBottom: 12 }}>
+              <p className="section-title" style={{ margin: 0 }}>欲しいものリスト ({watchlistStocks.length})</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {watchlistStocks.map(stock => (
+                <StockListItem
+                  key={stock.symbol}
+                  stock={stock}
+                  price={prices[stock.symbol]}
+                  onDelete={() => handleDelete(stock.symbol, stock.name)}
+                  onToggleTarget={() => handleToggleTarget(stock)}
+                  onEdit={() => setEditingId(editingId === stock.id ? null : stock.id)}
+                  isEditing={editingId === stock.id}
+                  onSave={(updated) => {
+                    saveStock(updated);
+                    loadData();
+                    setEditingId(null);
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
@@ -572,9 +637,9 @@ function StockListItem({
           borderTop: '1px solid rgba(255,255,255,0.03)'
         }}>
           <div className="col">
-            <span className="label">平均単価</span>
+            <span className="label">{stock.is_watchlist ? '目標単価' : '平均単価'}</span>
             <span style={{ fontWeight: 600, fontSize: 13, fontFamily: 'Outfit' }}>¥{stock.avg_price.toLocaleString()}</span>
-            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{stock.shares.toLocaleString()}株</span>
+            {!stock.is_watchlist && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{stock.shares.toLocaleString()}株</span>}
           </div>
           <div className="col">
             <span className="label">現在値</span>
@@ -582,29 +647,40 @@ function StockListItem({
               {price ? `¥${price.price.toLocaleString()}` : '---'}
             </span>
           </div>
+          {!stock.is_watchlist && (
+            <div className="col">
+              <span className="label">現在評価額</span>
+              <span style={{ fontWeight: 700, fontSize: 13, fontFamily: 'Outfit', color: price ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {price ? `¥${Math.round(price.price * stock.shares).toLocaleString()}` : '---'}
+              </span>
+            </div>
+          )}
           <div className="col">
-            <span className="label">現在評価額</span>
-            <span style={{ fontWeight: 700, fontSize: 13, fontFamily: 'Outfit', color: price ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-              {price ? `¥${Math.round(price.price * stock.shares).toLocaleString()}` : '---'}
-            </span>
-          </div>
-          <div className="col">
-            <span className="label">損益</span>
+            <span className="label">{stock.is_watchlist ? '目標比' : '損益'}</span>
             {price ? (
               (() => {
-                const profitLoss = (price.price - stock.avg_price) * stock.shares;
-                const profitLossPct = stock.avg_price > 0 ? ((price.price - stock.avg_price) / stock.avg_price) * 100 : 0;
-                const isProfit = profitLoss >= 0;
-                return (
-                  <>
-                    <span className={isProfit ? 'rate-up' : 'rate-down'} style={{ fontWeight: 700, fontSize: 13, fontFamily: 'Outfit' }}>
-                      {isProfit ? '+' : ''}{profitLossPct.toFixed(1)}%
-                    </span>
-                    <span style={{ fontSize: 10, color: isProfit ? 'var(--color-buy)' : 'var(--color-no)' }}>
-                      {isProfit ? '+' : ''}¥{Math.round(profitLoss).toLocaleString()}
-                    </span>
-                  </>
-                );
+                if (stock.is_watchlist) {
+                   const diffPct = stock.avg_price > 0 ? ((price.price - stock.avg_price) / stock.avg_price) * 100 : 0;
+                   return (
+                     <span className={diffPct <= 0 ? 'rate-down' : 'rate-neutral'} style={{ fontWeight: 700, fontSize: 13, fontFamily: 'Outfit' }}>
+                       {diffPct > 0 ? '+' : ''}{diffPct.toFixed(1)}%
+                     </span>
+                   );
+                } else {
+                   const profitLoss = (price.price - stock.avg_price) * stock.shares;
+                   const profitLossPct = stock.avg_price > 0 ? ((price.price - stock.avg_price) / stock.avg_price) * 100 : 0;
+                   const isProfit = profitLoss >= 0;
+                   return (
+                     <>
+                       <span className={isProfit ? 'rate-up' : 'rate-down'} style={{ fontWeight: 700, fontSize: 13, fontFamily: 'Outfit' }}>
+                         {isProfit ? '+' : ''}{profitLossPct.toFixed(1)}%
+                       </span>
+                       <span style={{ fontSize: 10, color: isProfit ? 'var(--color-buy)' : 'var(--color-no)' }}>
+                         {isProfit ? '+' : ''}¥{Math.round(profitLoss).toLocaleString()}
+                       </span>
+                     </>
+                   );
+                }
               })()
             ) : (
               <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>---</span>
