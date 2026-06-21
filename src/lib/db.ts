@@ -1,5 +1,5 @@
 /**
- * デモ用・本番用データストア
+ * ユーザー別データストア
  * LocalStorage（ブラウザ内の保存領域）を正としつつ、
  * Supabaseが設定されていれば非同期で同期する Local-First アーキテクチャ
  */
@@ -7,7 +7,18 @@
 import { Stock, PriceData, BudgetSettings, AppSettings } from './types';
 import { supabase } from './supabase';
 
-// ==================== LocalStorageのキー定義 ====================
+// ==================== ログインユーザーの動的ID管理 ====================
+let currentUserId = 'default_user';
+
+export function setUserId(userId: string): void {
+  currentUserId = userId || 'default_user';
+}
+
+export function getUserId(): string {
+  return currentUserId;
+}
+
+// ==================== LocalStorageのキー取得（ユーザー毎に分離） ====================
 const KEYS = {
   STOCKS: 'finapp_stocks',
   PRICES: 'finapp_prices',
@@ -15,6 +26,10 @@ const KEYS = {
   SETTINGS: 'finapp_settings',
   BUY_HISTORY: 'finapp_buy_history',
 };
+
+function getKey(baseKey: string): string {
+  return `${baseKey}_${currentUserId}`;
+}
 
 // ==================== デフォルト設定 ====================
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -28,17 +43,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   supabase_anon_key: '',
   stock_api_key: '',
   line_token: '',
+  line_user_id: '',
   updated_at: new Date().toISOString(),
 };
 
-export const DEFAULT_BUDGET: BudgetSettings = {
-  user_id: 'default_user',
-  monthly_budget: 0,
-  rollover_enabled: false,
-  rollover_limit: 10000,
-  current_budget: 0,
-  updated_at: new Date().toISOString(),
-};
+export function getDefaultBudget(): BudgetSettings {
+  return {
+    user_id: currentUserId,
+    monthly_budget: 0,
+    rollover_enabled: false,
+    rollover_limit: 10000,
+    current_budget: 0,
+    updated_at: new Date().toISOString(),
+  };
+}
 
 // ==================== デモ用サンプルデータ ====================
 export const DEMO_STOCKS: Stock[] = [
@@ -81,7 +99,7 @@ export const DEMO_STOCKS: Stock[] = [
 function load<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(getKey(key));
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
@@ -91,25 +109,45 @@ function load<T>(key: string, fallback: T): T {
 
 function save<T>(key: string, data: T): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(key, JSON.stringify(data));
+  localStorage.setItem(getKey(key), JSON.stringify(data));
+}
+
+// 価格キャッシュのみユーザー共通で利用可能にする（銘柄の現在株価はユーザーごとに変わらないため）
+function loadPriceCache(fallback: Record<string, PriceData>): Record<string, PriceData> {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = localStorage.getItem(KEYS.PRICES);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as Record<string, PriceData>;
+  } catch {
+    return fallback;
+  }
+}
+
+function savePriceCacheRaw(data: Record<string, PriceData>): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(KEYS.PRICES, JSON.stringify(data));
 }
 
 // ==================== Supabase 同期ユーティリティ ====================
 
 // 起動時にSupabaseからデータを取得してローカルを更新する
 export async function syncFromSupabase() {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return; // Supabase未設定時はスキップ
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || currentUserId === 'default_user') return;
 
   try {
     const [{ data: stocksData }, { data: budgetData }, { data: settingsData }] = await Promise.all([
-      supabase.from('stocks').select('*'),
-      supabase.from('budget_settings').select('*').eq('user_id', 'default_user').single(),
-      supabase.from('app_settings').select('*').eq('user_id', 'default_user').single()
+      supabase.from('stocks').select('*').eq('user_id', currentUserId),
+      supabase.from('budget_settings').select('*').eq('user_id', currentUserId).maybeSingle(),
+      supabase.from('app_settings').select('*').eq('user_id', currentUserId).maybeSingle()
     ]);
 
     if (stocksData && stocksData.length > 0) save(KEYS.STOCKS, stocksData);
     if (budgetData) save(KEYS.BUDGET, budgetData);
-    if (settingsData) save(KEYS.SETTINGS, settingsData);
+    if (settingsData) {
+      // settings から supabase 関連のキーを除外し、環境変数と混ざらないようにマージ
+      save(KEYS.SETTINGS, { ...DEFAULT_SETTINGS, ...settingsData });
+    }
   } catch (error) {
     console.error('Supabaseからの同期に失敗しました:', error);
   }
@@ -119,7 +157,7 @@ export async function syncFromSupabase() {
 
 export function getStocks(): Stock[] {
   const stocks = load<Stock[]>(KEYS.STOCKS, []);
-  if (stocks.length === 0) {
+  if (stocks.length === 0 && currentUserId === 'default_user') {
     save(KEYS.STOCKS, DEMO_STOCKS);
     return DEMO_STOCKS;
   }
@@ -131,16 +169,18 @@ export function saveStock(stock: Stock): void {
   const stocks = getStocks();
   const idx = stocks.findIndex(s => s.symbol === stock.symbol);
   
+  const updatedStock = { ...stock, user_id: currentUserId };
+
   if (idx >= 0) {
-    stocks[idx] = stock;
+    stocks[idx] = updatedStock;
   } else {
-    stocks.push(stock);
+    stocks.push(updatedStock);
   }
   save(KEYS.STOCKS, stocks);
 
   // Supabaseへ非同期保存
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    supabase.from('stocks').upsert(stock, { onConflict: 'id' }).then(({ error }) => {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && currentUserId !== 'default_user') {
+    supabase.from('stocks').upsert(updatedStock, { onConflict: 'id' }).then(({ error }) => {
       if (error) console.error('Supabase保存エラー:', error);
     });
   }
@@ -153,7 +193,7 @@ export function deleteStock(symbol: string): void {
   save(KEYS.STOCKS, newStocks);
 
   // Supabaseから非同期削除
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL && stockToDelete) {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && stockToDelete && currentUserId !== 'default_user') {
     supabase.from('stocks').delete().eq('id', stockToDelete.id).then(({ error }) => {
       if (error) console.error('Supabase削除エラー:', error);
     });
@@ -184,7 +224,7 @@ export function upsertStockFromCSV(
   } else {
     updatedStock = {
       id: `stock-${symbol}-${Date.now()}`,
-      user_id: 'default_user',
+      user_id: currentUserId,
       symbol,
       name,
       avg_price: newAvgPrice,
@@ -200,7 +240,7 @@ export function upsertStockFromCSV(
   
   save(KEYS.STOCKS, stocks);
 
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && currentUserId !== 'default_user') {
     supabase.from('stocks').upsert(updatedStock, { onConflict: 'id' }).then(({ error }) => {
       if (error) console.error(error);
     });
@@ -210,24 +250,25 @@ export function upsertStockFromCSV(
 // ==================== 株価キャッシュ管理 ====================
 
 export function getPriceCache(): Record<string, PriceData> {
-  return load<Record<string, PriceData>>(KEYS.PRICES, {});
+  return loadPriceCache({});
 }
 
 export function savePriceCache(prices: Record<string, PriceData>): void {
-  save(KEYS.PRICES, prices);
+  savePriceCacheRaw(prices);
 }
 
 // ==================== 予算管理 ====================
 
 export function getBudget(): BudgetSettings {
-  return load<BudgetSettings>(KEYS.BUDGET, DEFAULT_BUDGET);
+  return load<BudgetSettings>(KEYS.BUDGET, getDefaultBudget());
 }
 
 export function saveBudget(budget: BudgetSettings): void {
-  save(KEYS.BUDGET, budget);
+  const updatedBudget = { ...budget, user_id: currentUserId };
+  save(KEYS.BUDGET, updatedBudget);
   
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    supabase.from('budget_settings').upsert(budget, { onConflict: 'user_id' }).then(({ error }) => {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && currentUserId !== 'default_user') {
+    supabase.from('budget_settings').upsert(updatedBudget, { onConflict: 'user_id' }).then(({ error }) => {
       if (error) console.error(error);
     });
   }
@@ -242,8 +283,8 @@ export function getSettings(): AppSettings {
 export function saveSettings(settings: AppSettings): void {
   save(KEYS.SETTINGS, settings);
 
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    supabase.from('app_settings').upsert({ ...settings, user_id: 'default_user' }, { onConflict: 'user_id' }).then(({ error }) => {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && currentUserId !== 'default_user') {
+    supabase.from('app_settings').upsert({ ...settings, user_id: currentUserId }, { onConflict: 'user_id' }).then(({ error }) => {
       if (error) console.error(error);
     });
   }

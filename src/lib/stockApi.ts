@@ -178,11 +178,12 @@ export async function fetchPrice(symbol: string): Promise<PriceData> {
     }
   }
 
-  // Yahoo Finance非公式APIを試みる
+  // Yahoo Finance非公式API（またはFinnhub）を試みる
   try {
     const suffix = symbol.length === 4 && /^\d+$/.test(symbol) ? '.T' : ''; // 日本株は.Tを付ける
     const ticker = `${symbol}${suffix}`;
-    const res = await fetch(`/api/stock?symbol=${ticker}`);
+    const apiKeyParam = settings.stock_api_key ? `&apiKey=${settings.stock_api_key}` : '';
+    const res = await fetch(`/api/stock?symbol=${ticker}${apiKeyParam}`);
     if (!res.ok) throw new Error('API error');
     const data = await res.json() as PriceData;
     cache[symbol] = data;
@@ -206,4 +207,78 @@ export async function fetchAllPrices(symbols: string[]): Promise<Record<string, 
     })
   );
   return results;
+}
+
+/**
+ * 指定した銘柄の過去3ヶ月間の株価チャートデータ（実データ）を取得する
+ */
+export async function fetchStockChart(
+  symbol: string,
+  avgPrice: number,
+  settings: AppSettings
+): Promise<ChartDataPoint[]> {
+  if (settings.demo_mode) {
+    return generateDemoChart(symbol, avgPrice);
+  }
+
+  try {
+    const suffix = symbol.length === 4 && /^\d+$/.test(symbol) ? '.T' : '';
+    const ticker = `${symbol}${suffix}`;
+    const res = await fetch(`/api/stock/chart?symbol=${ticker}`);
+    if (!res.ok) throw new Error('API error fetching chart');
+    const data = await res.json() as { date: string; price: number; high: number }[];
+
+    // 各営業日ごとの3ヶ月高値を計算しながら ChartDataPoint[] にパース
+    const points: ChartDataPoint[] = data.map((pt, idx) => {
+      // 過去90日間のうち、その日より前の最大60営業日（約3ヶ月分）から高値を探す
+      const startIdx = Math.max(0, idx - 60);
+      const prevPoints = data.slice(startIdx, idx + 1);
+      const validHighs = prevPoints
+        .map(p => p.high ?? p.price)
+        .filter(h => h !== null && h !== undefined);
+      
+      const currentHigh3m = validHighs.length > 0 ? Math.max(...validHighs) : pt.price;
+
+      // 下落率の算出
+      const drop_from_high = currentHigh3m > 0
+        ? ((pt.price - currentHigh3m) / currentHigh3m) * 100
+        : 0;
+
+      const drop_from_avg = avgPrice > 0
+        ? ((pt.price - avgPrice) / avgPrice) * 100
+        : 0;
+
+      // 買いシグナル判定
+      let buyPoint = undefined;
+      const is_surplus = drop_from_avg <= settings.surplus_threshold;
+      const meets_high = drop_from_high <= settings.drop_high_threshold;
+      const meets_avg = drop_from_avg <= settings.drop_avg_threshold;
+
+      if (is_surplus || meets_high || meets_avg) {
+        buyPoint = {
+          date: pt.date,
+          price: pt.price,
+          type: (is_surplus ? 'surplus' : 'normal') as 'normal' | 'surplus',
+          drop_from_high,
+          drop_from_avg,
+          reason: is_surplus
+            ? `余剰資金候補: 平均取得単価から${drop_from_avg.toFixed(1)}%下落`
+            : meets_avg
+            ? `買いOK: 平均取得単価から${drop_from_avg.toFixed(1)}%下落`
+            : `買いOK: 3か月高値から${drop_from_high.toFixed(1)}%下落`,
+        };
+      }
+
+      return {
+        date: pt.date,
+        price: pt.price,
+        buyPoint,
+      };
+    });
+
+    return points;
+  } catch (error) {
+    console.error(`[stockApi] Failed to fetch chart for ${symbol}:`, error);
+    return generateDemoChart(symbol, avgPrice);
+  }
 }

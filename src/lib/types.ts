@@ -64,6 +64,7 @@ export interface AppSettings {
   supabase_anon_key: string;
   stock_api_key: string;
   line_token: string;
+  line_user_id: string; // LINE自動応答用のユーザーID
   updated_at: string;
 }
 

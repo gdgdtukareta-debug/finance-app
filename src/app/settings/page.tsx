@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import {
   Wallet, RefreshCw, Clock, TrendingDown, Bell, Key,
-  Database, LogOut, Info, ChevronRight, Save, Zap
+  Database, LogOut, Info, ChevronRight, Save, Zap, User, Copy, Check
 } from 'lucide-react';
 import { getSettings, saveSettings, getBudget, saveBudget, getStocks } from '@/lib/db';
 import { AppSettings, BudgetSettings } from '@/lib/types';
+import { useAuth } from '@/components/AuthProvider';
 
 type Toast = { id: number; message: string; type: 'success' | 'error' | 'info' };
 
@@ -15,10 +16,17 @@ export default function SettingsPage() {
   const [budget, setBudget] = useState<BudgetSettings | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState('');
+
+  const { user, signOut } = useAuth();
 
   useEffect(() => {
     setSettings(getSettings());
     setBudget(getBudget());
+    if (typeof window !== 'undefined') {
+      setWebhookUrl(`${window.location.origin}/api/webhook/line`);
+    }
   }, []);
 
   const showToast = (message: string, type: Toast['type'] = 'info') => {
@@ -30,7 +38,7 @@ export default function SettingsPage() {
   const handleSave = async () => {
     if (!settings || !budget) return;
     setSaving(true);
-    await new Promise(r => setTimeout(r, 400)); // 保存感を演出
+    await new Promise(r => setTimeout(r, 400));
     saveSettings({ ...settings, updated_at: new Date().toISOString() });
     saveBudget({ ...budget, updated_at: new Date().toISOString() });
     setSaving(false);
@@ -49,10 +57,11 @@ export default function SettingsPage() {
     showToast('CSVをエクスポートしました', 'success');
   };
 
-  const handleResetDemo = () => {
-    if (!confirm('デモデータをリセットしますか？登録した銘柄はすべて消えます。')) return;
-    localStorage.clear();
-    window.location.reload();
+  const handleCopyWebhook = () => {
+    navigator.clipboard.writeText(webhookUrl);
+    setCopied(true);
+    showToast('コピーしました', 'success');
+    setTimeout(() => setCopied(false), 2000);
   };
 
   if (!settings || !budget) return (
@@ -83,6 +92,28 @@ export default function SettingsPage() {
       </div>
 
       <div className="page-content fade-in" style={{ paddingBottom: 100 }}>
+
+        {/* ログインユーザー情報 */}
+        <div className="section">
+          <p className="section-title">アカウント管理</p>
+          <div className="card">
+            <div className="row-between">
+              <div className="row" style={{ gap: 10 }}>
+                <div style={{ padding: 8, background: 'rgba(99,102,241,0.1)', borderRadius: '50%', color: 'var(--accent-primary)' }}>
+                  <User size={18} />
+                </div>
+                <div>
+                  <p style={{ fontWeight: 600, fontSize: 13 }}>ログイン中のアカウント</p>
+                  <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{user?.email}</p>
+                </div>
+              </div>
+              <button className="btn btn-danger btn-sm" onClick={signOut} style={{ gap: 6 }}>
+                <LogOut size={13} />
+                ログアウト
+              </button>
+            </div>
+          </div>
+        </div>
 
         {/* デモモード */}
         <div className="section">
@@ -241,27 +272,60 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* LINE通知 */}
+        {/* LINE通知 ＆ Webhook設定 */}
         <div className="section">
           <p className="section-title">
             <Bell size={11} style={{ display: 'inline', marginRight: 6 }} />
-            LINE通知設定（オーナー専用）
+            LINE自動返信・通知設定
           </p>
-          <div className="card">
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div className="form-group">
               <label className="form-label">LINE チャンネルアクセストークン</label>
               <input
                 className="form-input"
                 type="password"
                 placeholder="LINE Messaging APIのトークン"
-                value={settings.line_token}
+                value={settings.line_token || ''}
                 onChange={e => setSettings(s => s ? { ...s, line_token: e.target.value } : s)}
               />
             </div>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.7 }}>
-              買い判定が「○」になった際や余剰資金候補時に<br />
-              LINEへ通知します。LINE Developersで取得できます。
-            </p>
+            
+            <div className="form-group">
+              <label className="form-label">あなたの LINE ユーザーID</label>
+              <input
+                className="form-input"
+                placeholder="トークで「ID」と送信すると取得できます"
+                value={settings.line_user_id || ''}
+                onChange={e => setSettings(s => s ? { ...s, line_user_id: e.target.value } : s)}
+              />
+              <p style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                このIDを登録すると、LINEから「判定」と送るだけでいつでも買い時を確認できます。
+              </p>
+            </div>
+
+            <div className="divider" />
+
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 'var(--radius-md)', padding: 12 }}>
+              <p style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 8 }}>💬 LINE Webhook 設定ガイド</p>
+              
+              <p style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                1. LINE Developers管理画面で、以下の <strong>Webhook URL</strong> をコピーして設定してください：
+              </p>
+              
+              <div className="row" style={{ gap: 8, margin: '8px 0' }}>
+                <input className="form-input" style={{ flex: 1, fontSize: 11, background: '#111520', border: '1px solid #1e293b' }} value={webhookUrl} readOnly />
+                <button className="btn btn-ghost" onClick={handleCopyWebhook} style={{ padding: '0 10px', height: 38 }}>
+                  {copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
+                </button>
+              </div>
+
+              <p style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                2. LINE Developers側で <strong>「Webhookの利用 (Use Webhook)」をオン</strong> にします。<br />
+                3. LINE Botと友だちになり、トークルームで「<strong>ID</strong>」と送ります。<br />
+                4. 送られてきた長い文字列をコピーし、上の「<strong>あなたの LINE ユーザーID</strong>」に入力して保存します。<br />
+                5. 以降、LINEで「<strong>判定</strong>」と送ると、最新の買い時銘柄リストが自動で届くようになります！
+              </p>
+            </div>
           </div>
         </div>
 
@@ -281,47 +345,41 @@ export default function SettingsPage() {
                 onChange={e => setSettings(s => s ? { ...s, stock_api_key: e.target.value } : s)}
               />
             </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              ※Finnhubのキーを設定しておくと、Yahoo Finance APIが一時的に停止・遅延した場合でも、米国株の現在値は自動的に公式API（Finnhub）から正確に補完されます。
+            </p>
           </div>
         </div>
 
-        {/* Supabase設定 */}
+        {/* Googleログイン有効化ガイド */}
         <div className="section">
           <p className="section-title">
             <Database size={11} style={{ display: 'inline', marginRight: 6 }} />
-            Supabase接続設定（本番モード用）
+            アカウント機能（Googleログイン）有効化ガイド
           </p>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div className="form-group">
-              <label className="form-label">Supabase URL</label>
-              <input
-                className="form-input"
-                placeholder="https://xxxx.supabase.co"
-                value={settings.supabase_url}
-                onChange={e => setSettings(s => s ? { ...s, supabase_url: e.target.value } : s)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Supabase Anon Key</label>
-              <input
-                className="form-input" type="password"
-                placeholder="eyJhbGci..."
-                value={settings.supabase_anon_key}
-                onChange={e => setSettings(s => s ? { ...s, supabase_anon_key: e.target.value } : s)}
-              />
-            </div>
-            <div style={{
-              padding: '10px 12px', background: 'rgba(245,158,11,0.08)',
-              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 'var(--radius-md)',
-              fontSize: 12, color: '#fcd34d', lineHeight: 1.7,
-            }}>
-              <Info size={11} style={{ display: 'inline', marginRight: 4 }} />
-              本番モードに切り替えると、データがSupabaseに保存されます。<br />
-              Supabase公式サイト（supabase.com）で無料アカウントを作成してください。
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              他のスマホやパソコンと同じデータで同期して見たい場合は、SupabaseとGoogleを接続することでGoogleアカウントログインが利用可能になります。一般の方でも以下の手順で行えます。
+            </p>
+
+            <div style={{ padding: 12, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 'var(--radius-md)', fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              <ol style={{ paddingLeft: 16, margin: 0 }}>
+                <li><strong>Google Cloud Console</strong>（無料）を開き、プロジェクトを作成します。</li>
+                <li>「OAuth 同意画面」を設定し、「認証情報」から「OAuth 2.0 クライアント ID」を作成します。</li>
+                <li>「承認済みのリダイレクト URI」に、以下のURLを設定します：
+                  <div style={{ background: '#111520', padding: '4px 8px', borderRadius: 4, fontFamily: 'monospace', fontSize: 10, margin: '4px 0', wordBreak: 'break-all' }}>
+                    https://avqoidkrntrxolvspoqh.supabase.co/auth/v1/callback
+                  </div>
+                </li>
+                <li>発行された <strong>クライアントID</strong> と <strong>クライアントシークレット</strong> をコピーします。</li>
+                <li><strong>Supabase Dashboard</strong> にログインし、[Auth] ➔ [Providers] ➔ [Google] を開きます。</li>
+                <li>Googleプロバイダーをオンにして、クライアントIDとクライアントシークレットを入力して保存します。これでGoogleログインが使えるようになります。</li>
+              </ol>
             </div>
           </div>
         </div>
 
-        {/* CSVエクスポート */}
+        {/* データ管理 */}
         <div className="section">
           <p className="section-title">データ管理</p>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -329,18 +387,13 @@ export default function SettingsPage() {
               <ChevronRight size={16} />
               ポートフォリオをCSVでエクスポート
             </button>
-            <div className="divider" />
-            <button className="btn btn-danger btn-full" onClick={handleResetDemo} style={{ justifyContent: 'flex-start', gap: 10 }}>
-              <LogOut size={16} />
-              デモデータをリセット
-            </button>
           </div>
         </div>
 
         {/* バージョン情報 */}
         <div style={{ textAlign: 'center', padding: '24px 0 8px', color: 'var(--text-muted)', fontSize: 12 }}>
-          買い増し判定アプリ v1.0.0<br />
-          <span style={{ fontSize: 11 }}>デモモードで動作中 • データはブラウザに保存されています</span>
+          買い増し判定アプリ v1.1.0<br />
+          <span style={{ fontSize: 11 }}>アカウント同期モード稼働中 • クラウドに安全に保存されています</span>
         </div>
       </div>
     </>
