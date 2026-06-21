@@ -4,7 +4,7 @@
  * 本番モード：Yahoo Finance / Finnhub APIから取得
  */
 
-import { PriceData, ChartDataPoint } from './types';
+import { PriceData, ChartDataPoint, AppSettings } from './types';
 import { getPriceCache, savePriceCache, getSettings } from './db';
 
 // ==================== 株価シミュレーション ====================
