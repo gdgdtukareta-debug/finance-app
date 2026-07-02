@@ -144,7 +144,7 @@ export default function LoginScreen() {
           </div>
         )}
 
-        {/* 1. Google ログイン (優先ルート) */}
+        {/* 1. Google ログイン (優先ルート)
         <button
           onClick={handleGoogleLogin}
           disabled={loading}
@@ -168,7 +168,6 @@ export default function LoginScreen() {
           onMouseOver={(e) => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
           onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.transform = 'none'; }}
         >
-          {/* GoogleのロゴをインラインSVGで表現 */}
           <svg width="18" height="18" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.92h6.69c-.29 1.5-.1.8-2.46 2.37v2.53h3.97c2.32-2.13 3.65-5.26 3.65-8.75z"/>
             <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.97-2.53c-1.1.74-2.52 1.18-3.96 1.18-3.05 0-5.63-2.06-6.55-4.83H1.36v2.6C3.34 21.46 7.37 24 12 24z"/>
@@ -178,12 +177,12 @@ export default function LoginScreen() {
           Google アカウントでサインイン
         </button>
 
-        {/* 区切り線 */}
         <div style={{ display: 'flex', alignItems: 'center', margin: '24px 0', color: '#475569', fontSize: 11 }}>
           <div style={{ flex: 1, height: 1, background: 'rgba(255, 255, 255, 0.08)' }} />
           <span style={{ padding: '0 12px', fontWeight: 500, letterSpacing: '0.05em' }}>またはメールでサインイン</span>
           <div style={{ flex: 1, height: 1, background: 'rgba(255, 255, 255, 0.08)' }} />
         </div>
+        */}
 
         {/* 2. メールアドレスログイン (予備ルート) */}
         <form onSubmit={handleEmailAuth} style={{ display: 'flex', flexDirection: 'column', gap: 12, textAlign: 'left' }}>
@@ -313,7 +312,7 @@ export default function LoginScreen() {
           )}
         </div>
 
-        {/* 設定に関する注意書き（一般ユーザー向け） */}
+        {/* 設定に関する注意書き（一般ユーザー向け）
         <div style={{
           marginTop: 28,
           padding: '10px 12px',
@@ -333,6 +332,7 @@ export default function LoginScreen() {
             Googleログインが反応しない場合は、管理者がSupabaseの設定を有効化していない可能性があります。その場合は上のメール登録からアカウントを作成してご利用いただけます。
           </span>
         </div>
+        */}
       </div>
     </div>
   );
